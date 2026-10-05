@@ -536,6 +536,22 @@ function fmt(n){
 function money(n){ return fmt(n) + ' XAF'; }
 function nowStr(){ return new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function uid(prefix){ return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function currentMonthKey(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function monthLabel(key){
+  if(!/^\d{4}-\d{2}$/.test(key||'')) return key||'—';
+  const [y,m] = key.split('-').map(Number);
+  return new Date(y, m-1, 1).toLocaleString('en-US',{month:'long'}) + ' ' + y;
+}
+// What a staff member owes/has paid for a given YYYY-MM month
+function staffMonthStatus(staffId, monthKey){
+  const staff = DB.staff.find(x=>x.id===staffId);
+  const due = staff ? Number(staff.monthlySalary||0) : 0;
+  const paid = DB.salaryPayments.filter(p=>p.staffId===staffId && p.month===monthKey).reduce((s,p)=>s+Number(p.amountPaid||0),0);
+  return { due, paid, remaining: Math.max(0, due-paid) };
+}
 function todayLocalISO(){
   const d = new Date();
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -2472,6 +2488,7 @@ function renderPayroll(){
   const activeStaff = DB.staff.filter(s=>s.status==='active' && !s.deleted);
   const totalMonthly = activeStaff.reduce((a,s)=>a+Number(s.monthlySalary||0),0);
   const paidAllTime = DB.salaryPayments.reduce((a,s)=>a+Number(s.amountPaid||0),0);
+  const cm = currentMonthKey();
 
   view.innerHTML = `
     <div class="stat-grid">
@@ -2486,14 +2503,17 @@ function renderPayroll(){
       </div>
       <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Monthly Salary</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Monthly Salary</th><th>Balance (${monthLabel(cm)})</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${DB.staff.filter(s=>!s.deleted).map(s=>`
+            ${DB.staff.filter(s=>!s.deleted).map(s=>{
+              const ms = staffMonthStatus(s.id, cm);
+              return `
               <tr class="tr-hover">
                 <td style="font-weight:600;">${s.name}</td>
                 <td>${s.role}</td>
                 <td>${s.phone||'—'}</td>
                 <td style="font-weight:700;">${money(s.monthlySalary)}</td>
+                <td>${ms.remaining<=0 ? `<span class="pill pill-green">Paid</span>` : `<span class="pill pill-amber">Owes ${money(ms.remaining)}</span>`}</td>
                 <td>${s.status==='active'?'<span class="pill pill-green">Active</span>':'<span class="pill pill-gray">Left / Inactive</span>'}</td>
                 <td>
                   <div style="display:flex;gap:6px;">
@@ -2502,7 +2522,7 @@ function renderPayroll(){
                   </div>
                 </td>
               </tr>
-            `).join('') || `<tr><td colspan="6"><div class="empty-state">${ICONS.payroll}<div>No staff added yet</div></div></td></tr>`}
+            `;}).join('') || `<tr><td colspan="7"><div class="empty-state">${ICONS.payroll}<div>No staff added yet</div></div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -2511,19 +2531,22 @@ function renderPayroll(){
       <div class="card-head"><div class="card-title">Recent Salary Payments</div></div>
       <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Staff</th><th>Month</th><th>Due</th><th>Paid</th><th>Method</th><th>Date</th></tr></thead>
+          <thead><tr><th>Staff</th><th>Month</th><th>Due</th><th>Paid</th><th>Balance After</th><th>Method</th><th>Date</th><th></th></tr></thead>
           <tbody>
             ${[...DB.salaryPayments].sort((a,b)=>b.createdAt-a.createdAt).slice(0,15).map(sp=>{
               const st = DB.staff.find(x=>x.id===sp.staffId);
+              const ms = staffMonthStatus(sp.staffId, sp.month);
               return `<tr class="tr-hover">
                 <td style="font-weight:600;">${st?st.name:'—'}</td>
-                <td>${sp.month}</td>
+                <td>${monthLabel(sp.month)} ${sp.isAdvance?'<span class="pill pill-gray">Advance</span>':''}</td>
                 <td>${money(sp.amountDue)}</td>
                 <td style="font-weight:700;">${money(sp.amountPaid)}</td>
-                <td>${sp.method}</td>
+                <td>${ms.remaining<=0?`<span class="pill pill-green">Settled</span>`:`<span class="pill pill-amber">${money(ms.remaining)}</span>`}</td>
+                <td style="text-transform:capitalize;">${sp.method}</td>
                 <td style="color:var(--ink-dim);">${new Date(sp.createdAt).toLocaleDateString('en-GB')}</td>
+                <td><button class="icon-btn" title="View / Print" onclick="viewSalaryPayment('${sp.id}')">${ICONS.print}</button></td>
               </tr>`;
-            }).join('') || `<tr><td colspan="6"><div class="empty-state">${ICONS.payroll}<div>No salary payments recorded yet</div></div></td></tr>`}
+            }).join('') || `<tr><td colspan="8"><div class="empty-state">${ICONS.payroll}<div>No salary payments recorded yet</div></div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -2579,16 +2602,14 @@ function saveStaff(staffId){
 
 function openSalaryPayModal(staffId){
   const s = DB.staff.find(x=>x.id===staffId);
-  const now = new Date();
-  const defaultMonth = now.toLocaleString('en-US',{month:'long'}) + ' ' + now.getFullYear();
+  const cm = currentMonthKey();
   openModal(`
     <div class="modal-head"><div class="modal-title">Pay Salary — ${s.name}</div><button class="modal-close" onclick="closeModal()">${ICONS.x}</button></div>
     <div class="modal-body">
-      <div class="field"><label>Month</label><input type="text" id="sp-month" value="${defaultMonth}" placeholder="e.g. September 2026"></div>
-      <div class="field-row">
-        <div class="field"><label>Amount Due</label><input type="number" id="sp-due" value="${s.monthlySalary}"></div>
-        <div class="field"><label>Amount Paid</label><input type="number" id="sp-paid" value="${s.monthlySalary}"></div>
-      </div>
+      <div class="field"><label>Month</label><input type="month" id="sp-month" value="${cm}" onchange="updateSalaryPreview('${staffId}')"></div>
+      <div id="sp-preview" style="font-size:12.5px;margin-bottom:14px;"></div>
+      <div class="field"><label>Amount Paying Now</label><input type="number" id="sp-paid" oninput="validateSalaryAmount()"></div>
+      <div id="sp-amount-warning" style="font-size:11px;color:var(--red-500);margin:-8px 0 10px;"></div>
       <div class="field"><label>Payment Method</label>
         <select id="sp-method">
           <option value="cash">Cash</option>
@@ -2601,23 +2622,93 @@ function openSalaryPayModal(staffId){
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-teal" onclick="saveSalaryPayment('${staffId}')">${ICONS.check} Record Payment</button>
+      <button class="btn btn-teal" id="sp-save-btn" onclick="saveSalaryPayment('${staffId}')">${ICONS.check} Record Payment</button>
     </div>
   `);
+  updateSalaryPreview(staffId);
+}
+function updateSalaryPreview(staffId){
+  const month = document.getElementById('sp-month').value;
+  const ms = staffMonthStatus(staffId, month);
+  const preview = document.getElementById('sp-preview');
+  const paidInput = document.getElementById('sp-paid');
+  const saveBtn = document.getElementById('sp-save-btn');
+  const isAdvance = month > currentMonthKey();
+  if(ms.remaining<=0){
+    preview.innerHTML = `<span style="color:var(--red-500);font-weight:700;">${monthLabel(month)} is already fully paid (${money(ms.paid)} of ${money(ms.due)}). Pick a different month to record an advance.</span>`;
+    paidInput.value = ''; paidInput.max = 0; paidInput.disabled = true;
+    saveBtn.disabled = true;
+  }else{
+    preview.innerHTML = `${isAdvance?'<span class="pill pill-gray">Advance</span> ':''}Due ${money(ms.due)} · Already paid ${money(ms.paid)} · <strong>Remaining ${money(ms.remaining)}</strong>`;
+    paidInput.disabled = false; paidInput.max = ms.remaining; paidInput.value = ms.remaining;
+    saveBtn.disabled = false;
+  }
+  document.getElementById('sp-amount-warning').textContent = '';
+}
+function validateSalaryAmount(){
+  const paidInput = document.getElementById('sp-paid');
+  const max = Number(paidInput.max||0);
+  const warn = document.getElementById('sp-amount-warning');
+  const val = parseFloat(paidInput.value)||0;
+  warn.textContent = (max>0 && val>max) ? `Maximum for this month is ${money(max)} — any extra should go toward a future month as an advance.` : '';
 }
 function saveSalaryPayment(staffId){
-  const month = document.getElementById('sp-month').value.trim();
-  const amountDue = parseFloat(document.getElementById('sp-due').value)||0;
+  const s = DB.staff.find(x=>x.id===staffId);
+  const month = document.getElementById('sp-month').value;
   const amountPaid = parseFloat(document.getElementById('sp-paid').value)||0;
   const method = document.getElementById('sp-method').value;
   const note = document.getElementById('sp-note').value.trim();
-  if(!month || amountPaid<=0){ toast('Enter month and a valid amount paid','error'); return; }
+  if(!month){ toast('Select a month','error'); return; }
+  const ms = staffMonthStatus(staffId, month);
+  if(ms.remaining<=0){ toast(`${monthLabel(month)} is already fully paid for ${s.name}. Choose a different month to record an advance.`,'error'); return; }
+  if(amountPaid<=0){ toast('Enter a valid amount','error'); return; }
+  if(amountPaid > ms.remaining){ toast(`That's more than the ${money(ms.remaining)} remaining for ${monthLabel(month)}`,'error'); return; }
+  const isAdvance = month > currentMonthKey();
   const now = Date.now();
-  DB.salaryPayments.push({id:uid('sal'), staffId, month, amountDue, amountPaid, method, note, recordedBy:currentUser.name, createdAt:now, updatedAt:now});
+  DB.salaryPayments.push({id:uid('sal'), staffId, month, amountDue:s.monthlySalary, amountPaid, method, note, isAdvance, recordedBy:currentUser.name, createdAt:now, updatedAt:now});
   saveDB();
   closeModal();
-  toast('Salary payment recorded','success');
+  toast(isAdvance ? `Advance payment recorded for ${monthLabel(month)}` : 'Salary payment recorded','success');
   renderPayroll();
+}
+function viewSalaryPayment(id){
+  const sp = DB.salaryPayments.find(x=>x.id===id);
+  if(!sp) return;
+  const st = DB.staff.find(x=>x.id===sp.staffId);
+  const ms = staffMonthStatus(sp.staffId, sp.month);
+  const receiptHtml = `
+    <div class="receipt">
+      <div class="center" style="font-weight:800;font-size:14px;">${DB.meta.storeName.toUpperCase()}</div>
+      ${DB.meta.address ? `<div class="center">${DB.meta.address}</div>` : ''}
+      ${DB.meta.phone ? `<div class="center">Tel: ${DB.meta.phone}</div>` : ''}
+      <div class="divider"></div>
+      <div class="center" style="font-weight:700;">SALARY PAYMENT SLIP${sp.isAdvance?' (ADVANCE)':''}</div>
+      <div class="divider"></div>
+      <div class="row"><span>Reference</span><span>${sp.id}</span></div>
+      <div class="row"><span>Staff</span><span>${st?st.name:'—'}</span></div>
+      <div class="row"><span>Role</span><span>${st?st.role:'—'}</span></div>
+      <div class="row"><span>Month</span><span>${monthLabel(sp.month)}</span></div>
+      <div class="row"><span>Date Paid</span><span>${new Date(sp.createdAt).toLocaleString('en-GB')}</span></div>
+      <div class="divider"></div>
+      <div class="row"><span>Monthly Salary (Due)</span><span>${fmt(sp.amountDue)}</span></div>
+      <div class="row" style="font-weight:800;font-size:14px;"><span>AMOUNT PAID</span><span>${fmt(sp.amountPaid)} XAF</span></div>
+      <div class="row"><span>Balance Remaining (${monthLabel(sp.month)})</span><span>${fmt(ms.remaining)}</span></div>
+      <div class="row"><span>Payment Method</span><span>${sp.method==='momo'?'MTN MoMo':sp.method==='om'?'Orange Money':sp.method==='bank'?'Bank Transfer':'Cash'}</span></div>
+      ${sp.note ? `<div class="row"><span>Note</span><span>${sp.note}</span></div>` : ''}
+      <div class="row"><span>Recorded By</span><span>${sp.recordedBy}</span></div>
+      <div class="divider"></div>
+      <div class="center" style="font-size:10px;color:#888;">Printed ${new Date().toLocaleString('en-GB')}</div>
+    </div>
+  `;
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Salary Payment — ${sp.id}</div><button class="modal-close" onclick="closeModal()">${ICONS.x}</button></div>
+    <div class="modal-body">${receiptHtml}</div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <button class="btn btn-teal" onclick="window.print()">${ICONS.print} Print</button>
+    </div>
+  `);
+  document.getElementById('print-area').innerHTML = receiptHtml;
 }
 
 /* ============================================================
@@ -3154,10 +3245,11 @@ function exportCSV(type){
     rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By']);
     DB.expenses.filter(e=>!e.deleted && inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy]));
   }else if(type==='payroll'){
-    rows.push(['Staff','Month','Amount Due','Amount Paid','Method','Date','Recorded By']);
+    rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By']);
     DB.salaryPayments.filter(sp=>inR(recordTime(sp))).forEach(sp=>{
       const st = DB.staff.find(x=>x.id===sp.staffId);
-      rows.push([st?st.name:'—', sp.month, sp.amountDue, sp.amountPaid, sp.method, new Date(sp.createdAt).toLocaleString('en-GB'), sp.recordedBy]);
+      const ms = staffMonthStatus(sp.staffId, sp.month);
+      rows.push([st?st.name:'—', monthLabel(sp.month), sp.amountDue, sp.amountPaid, ms.remaining, sp.isAdvance?'Yes':'No', sp.method, new Date(sp.createdAt).toLocaleString('en-GB'), sp.recordedBy]);
     });
   }else if(type==='supplies'){
     rows.push(['Date','Supplier','Product','Qty','Unit Cost','Line Total','Delivery Total','Bonus','Paid Now','Credit','Recorded By','Status']);
