@@ -2396,9 +2396,13 @@ function renderSupplyLines(){
   updateSupplyGrandTotal();
 }
 function setSupplyLineProduct(i, productId){
-  supplyDraftItems[i].productId = productId;
+  const line = supplyDraftItems[i];
+  const changed = line.productId !== productId;
+  line.productId = productId;
   const p = DB.products.find(x=>x.id===productId);
-  if(p && !supplyDraftItems[i].unitCost){ supplyDraftItems[i].unitCost = p.costPrice; }
+  // A different product means a different cost: always load the newly chosen product's cost
+  // (previously this only happened when the cost was still 0, so the old product's cost stuck).
+  if(changed){ line.unitCost = p ? (Number(p.costPrice)||0) : 0; }
   renderSupplyLines();
 }
 function updateSupplyLine(i, field, value){

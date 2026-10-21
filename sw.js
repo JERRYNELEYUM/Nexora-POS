@@ -1,6 +1,6 @@
 /* Nexora POS service worker — offline app shell.
    Bump VERSION whenever you redeploy a changed index.html so tills pick it up. */
-const VERSION = 'nexora-pos-v6';
+const VERSION = 'nexora-pos-v7';
 const SHELL = VERSION + '-shell';
 const CORE = [
   './',
