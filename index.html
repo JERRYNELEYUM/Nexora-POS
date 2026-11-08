@@ -3123,13 +3123,13 @@ function renderReportsOverview(){
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Total Expenses ${pl}</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalExpenses)}</div></div>
-      <div class="stat-card"><div class="stat-label">Total Salaries Paid</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSalaries)}</div></div>
+      ${isAdmin() ? `<div class="stat-card"><div class="stat-label">Total Salaries Paid</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSalaries)}</div></div>` : ''}
       <div class="stat-card"><div class="stat-label">Total Supplier Purchases</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSupplyRecordedCost)}</div><div class="stat-delta" style="color:var(--ink-dim);">excludes ${money(d.totalSupplyBonus)} bonus stock</div></div>
       <div class="stat-card"><div class="stat-label">Owed to Suppliers (Credit, now)</div><div class="stat-value" style="color:${d.totalSupplierCredit>0?'var(--amber-600)':'var(--ink)'}">${money(d.totalSupplierCredit)}</div></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Cash in Hand (Opening Balance)</div><div class="stat-value">${money(d.cashInHand)}</div>${isAll?'':'<div class="stat-delta" style="color:var(--ink-dim);">added during this period</div>'}</div>
-      <div class="stat-card"><div class="stat-label">Net Position</div><div class="stat-value" style="color:${d.netPosition>=0?'var(--green-500)':'var(--red-500)'};">${money(d.netPosition)}</div><div class="stat-delta" style="color:var(--ink-dim);">Cash in hand + revenue − expenses − salaries − supplier purchases</div></div>
+      <div class="stat-card"><div class="stat-label">Net Position</div><div class="stat-value" style="color:${d.netPosition>=0?'var(--green-500)':'var(--red-500)'};">${money(d.netPosition)}</div><div class="stat-delta" style="color:var(--ink-dim);">${isAdmin() ? 'Cash in hand + revenue − expenses − salaries − supplier purchases' : 'Cash in hand + revenue − operating costs'}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
       <div class="card">
