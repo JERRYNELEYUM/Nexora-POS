@@ -3187,7 +3187,7 @@ function renderReportsOverview(){
         <button class="btn btn-ghost" onclick="exportCSV('products')">${ICONS.download} Export Inventory (CSV)</button>
         <button class="btn btn-ghost" onclick="exportCSV('movements')">${ICONS.download} Export Stock Movements (CSV)</button>
         <button class="btn btn-ghost" onclick="exportCSV('expenses')">${ICONS.download} Export Expenses (CSV)</button>
-        <button class="btn btn-ghost" onclick="exportCSV('payroll')">${ICONS.download} Export Payroll (CSV)</button>
+        ${isAdmin() ? `<button class="btn btn-ghost" onclick="exportCSV('payroll')">${ICONS.download} Export Payroll (CSV)</button>` : ''}
         <button class="btn btn-ghost" onclick="exportCSV('supplies')">${ICONS.download} Export Supplier Deliveries (CSV)</button>
         <button class="btn btn-ghost" onclick="exportCSV('customerPayments')">${ICONS.download} Export Customer Payments (CSV)</button>
         <button class="btn btn-ghost" onclick="exportCSV('supplierPayments')">${ICONS.download} Export Supplier Payments (CSV)</button>
@@ -3210,7 +3210,7 @@ function buildOverviewReportHtml(){
     ]) +
     prKpis([
       ['Expenses', money(d.totalExpenses)],
-      ['Salaries Paid', money(d.totalSalaries)],
+      ...(isAdmin() ? [['Salaries Paid', money(d.totalSalaries)]] : []),
       ['Supplier Purchases', money(d.totalSupplyRecordedCost), `excl. ${money(d.totalSupplyBonus)} bonus`],
       ['Net Position', money(d.netPosition), 'cash added + revenue − costs']
     ]) +
@@ -3259,6 +3259,7 @@ function buildDailySummaryReportHtml(){
 }
 
 function exportCSV(type){
+  if(type==='payroll' && !isAdmin()){ toast('Payroll exports are available to administrators only.','error'); return; }
   let rows = [];
   // dated records follow the time frame chosen on the Reports page
   const range = periodRange(rptFilter);
