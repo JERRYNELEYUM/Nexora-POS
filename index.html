@@ -810,6 +810,9 @@ function navigateTo(viewId){
 let posSelectedCat = 'All';
 let posSearch = '';
 let posPayMethod = 'cash';
+let posDiscountValue = 0;
+let posDiscountType = 'flat';
+let posDiscountNote = '';
 let posIncompletePayment = false;
 let posSelectedCustomer = null;
 
@@ -908,7 +911,18 @@ function clearCart(){
 
 function cartTotals(){
   const subtotal = cart().reduce((s,c)=>s+c.price*c.qty,0);
-  return { subtotal, total: subtotal };
+  const eligible = currentUser && (currentUser.role==='admin' || currentUser.role==='assistant');
+  const raw = eligible ? Math.max(0, Number(posDiscountValue)||0) : 0;
+  const discount = Math.min(subtotal, posDiscountType==='percent' ? subtotal*Math.min(raw,100)/100 : raw);
+  return { subtotal, discount, total: Math.max(0,subtotal-discount) };
+}
+function updatePosDiscount(){
+  if(!currentUser || !['admin','assistant'].includes(currentUser.role)){ toast('Only an administrator or assistant manager can apply discounts.','error'); return; }
+  posDiscountValue = Math.max(0,Number(document.getElementById('pos-discount-value')?.value)||0);
+  posDiscountType = document.getElementById('pos-discount-type')?.value || 'flat';
+  posDiscountNote = document.getElementById('pos-discount-note')?.value.trim() || '';
+  if(posDiscountType==='percent') posDiscountValue=Math.min(100,posDiscountValue);
+  renderCart();
 }
 
 function renderCart(){
@@ -937,6 +951,9 @@ function renderCart(){
   const t = cartTotals();
   const cust = DB.customers.find(c=>c.id===posSelectedCustomer);
   sumWrap.innerHTML = `
+    ${currentUser && ['admin','assistant'].includes(currentUser.role) ? `<div class="field-row" style="margin-bottom:8px;"><div class="field"><label>Discount</label><input id="pos-discount-value" type="number" min="0" step="1" value="${posDiscountValue}" placeholder="0"></div><div class="field"><label>Type</label><select id="pos-discount-type"><option value="flat" ${posDiscountType==='flat'?'selected':''}>Amount (XAF)</option><option value="percent" ${posDiscountType==='percent'?'selected':''}>Percent (%)</option></select></div></div><div class="field" style="margin-bottom:8px;"><label>Discount reason (optional)</label><input id="pos-discount-note" value="${posDiscountNote.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="e.g. Customer loyalty"></div><button class="btn btn-ghost" style="width:100%;margin-bottom:8px;" onclick="updatePosDiscount()">Apply discount</button>` : ''}
+    <div class="sum-row"><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
+    ${t.discount>0 ? `<div class="sum-row"><span>Discount</span><span>−${money(t.discount)}</span></div>` : ''}
     <div class="sum-row total"><span>Total</span><span>${money(t.total)}</span></div>
     <div class="pay-methods" style="grid-template-columns:1fr 1fr 1fr 1fr;">
       <button class="pay-method ${posPayMethod==='cash'?'active':''}" onclick="setPosPayMethod('cash')">Cash</button>
@@ -1125,7 +1142,7 @@ function completeSale(){
   const sale = {
     id:nextReceiptId(),
     date:saleDate,
-    items, subtotal:t.subtotal, total:t.total,
+    items, subtotal:t.subtotal, discount:t.discount, discountNote:posDiscountNote, total:t.total,
     paymentMethod: balanceDue>0 ? (amountPaid<=0 ? 'credit' : effectiveMethod) : effectiveMethod,
     reference: ((effectiveMethod==='momo'||effectiveMethod==='om') && !posIncompletePayment) ? (document.getElementById('momo-ref')?.value||'') : '',
     cashReceived: effectiveMethod==='cash' ? amountPaid : t.total,
@@ -1150,6 +1167,7 @@ function completeSale(){
   }
   DB.sales.push(sale);
   DB.session.cart = [];
+  posDiscountValue = 0; posDiscountType = 'flat'; posDiscountNote = '';
   posIncompletePayment = false;
   posPayMethod = 'cash';
   saveDB();
