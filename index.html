@@ -1029,7 +1029,7 @@ function resumeHeldSale(id){
   closeModal();
   renderPOS();
 }
-function deleteHeldSale(id)
+function deleteHeldSale(id){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   DB.session.heldSales = DB.session.heldSales.filter(x=>x.id!==id);
   saveDB();
@@ -1684,7 +1684,7 @@ function saveProduct(productId){
   closeModal();
   renderInventory();
 }
-function deleteProduct(productId)
+function deleteProduct(productId){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   const p = DB.products.find(x=>x.id===productId);
   if(!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
@@ -1919,7 +1919,7 @@ function settleBalance(saleId){
   toast('Balance marked as settled','success');
   renderSalesTable();
 }
-function voidSale(saleId)
+function voidSale(saleId){
   if(!isAdmin()){ toast('Only an admin can void records.','error'); return; }
   const sale = DB.sales.find(s=>s.id===saleId);
   if(!sale || sale.voided) return;
@@ -2094,7 +2094,7 @@ function saveCustomer(customerId){
   closeModal();
   if(currentView==='customers') renderCustomers(); else renderPOS();
 }
-function deleteCustomer(customerId)
+function deleteCustomer(customerId){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   if(!confirm('Delete this customer?')) return;
   const c = DB.customers.find(x=>x.id===customerId);
@@ -2218,7 +2218,7 @@ function viewSupply(id){
   `);
   document.getElementById('print-area').innerHTML = receiptHtml;
 }
-function voidSupply(id)
+function voidSupply(id){
   if(!isAdmin()){ toast('Only an admin can void records.','error'); return; }
   const sup = DB.supplies.find(x=>x.id===id);
   if(!sup || sup.voided) return;
@@ -2320,7 +2320,7 @@ function saveSupplier(supplierId){
   closeModal();
   renderSuppliers();
 }
-function deleteSupplier(supplierId)
+function deleteSupplier(supplierId){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   if(!confirm('Delete this supplier?')) return;
   const s = DB.suppliers.find(x=>x.id===supplierId);
@@ -2893,7 +2893,7 @@ function saveExpense(){
   toast('Expense recorded','success');
   renderExpenses();
 }
-function deleteExpense(id)
+function deleteExpense(id){
   if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
   if(!confirm('Delete this expense record? This cannot be undone.')) return;
   const e = DB.expenses.find(x=>x.id===id);
@@ -2911,7 +2911,7 @@ function addExpenseCategory(){
   saveDB();
   renderExpenses();
 }
-function deleteExpenseCategory(cat)
+function deleteExpenseCategory(cat){
   if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
   if(DB.expenses.some(e=>e.category===cat && !e.deleted)){ toast('Cannot delete — expenses use this category','error'); return; }
   DB.expenseCategories = DB.expenseCategories.filter(c=>c!==cat);
@@ -3438,7 +3438,7 @@ function saveCashAdjustment(){
   toast('Cash added','success');
   renderSettings();
 }
-function deleteCashAdjustment(id)
+function deleteCashAdjustment(id){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   if(!confirm('Remove this cash entry? This cannot be undone.')) return;
   const c = DB.cashAdjustments.find(x=>x.id===id);
@@ -3469,7 +3469,7 @@ function addCategory(){
   saveDB();
   renderSettings();
 }
-function deleteCategory(cat)
+function deleteCategory(cat){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   if(DB.products.some(p=>p.category===cat && p.active!==false)){ toast('Cannot delete — products use this category','error'); return; }
   DB.categories = DB.categories.filter(c=>c!==cat);
@@ -3516,7 +3516,7 @@ function saveUser(userId){
   closeModal();
   renderSettings();
 }
-function deleteUser(userId)
+function deleteUser(userId){
   if(!isAdmin()){ toast('Only an admin can delete records.','error'); return; }
   if(DB.users.length<=1){ toast('Cannot delete the last user','error'); return; }
   if(!confirm('Delete this user?')) return;
