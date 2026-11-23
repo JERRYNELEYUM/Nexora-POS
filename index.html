@@ -3309,7 +3309,7 @@ function exportCSV(type){
     rows.push(['Date','Product','Type','Qty','Reason','User']);
     DB.movements.filter(m=>inR(m.createdAt)).forEach(m=>rows.push([new Date(m.createdAt).toLocaleString('en-GB'), m.productName, m.type, m.qty, m.reason, m.userName]));
   }else if(type==='expenses'){
-    rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By']);
+    rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By','Status','Voided By','Voided At','Void Reason']);
     DB.expenses.filter(e=>inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy, e.voided?'VOIDED':'ACTIVE', e.voidedBy||'', e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'', e.voidReason||'']));
   }else if(type==='payroll'){
     rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By']);
