@@ -447,7 +447,22 @@ function defaultDB(){
 function loadDB(){
   try{
     const raw = localStorage.getItem(DB_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw){
+      const data = JSON.parse(raw);
+      let migrated = false;
+      (data.expenses||[]).forEach(e=>{
+        if(e.deleted && !e.voided){
+          e.voided = true;
+          e.voidReason = 'Legacy deleted record migrated to void status';
+          e.voidedBy = e.recordedBy || 'System migration';
+          e.voidedAt = e.updatedAt || e.createdAt || Date.now();
+          e.updatedAt = e.voidedAt;
+          migrated = true;
+        }
+      });
+      if(migrated) localStorage.setItem(DB_KEY, JSON.stringify(data));
+      return data;
+    }
   }catch(e){ console.error('DB load failed', e); }
   return null;
 }
@@ -1923,11 +1938,16 @@ function voidSale(saleId){
   if(!isAdmin()){ toast('Only an admin can void records.','error'); return; }
   const sale = DB.sales.find(s=>s.id===saleId);
   if(!sale || sale.voided) return;
-  if(!confirm(`Void sale ${saleId}? This will restore stock for all items. This cannot be undone.`)) return;
+  const reason = prompt('Enter the reason for voiding sale '+saleId+':');
+  if(reason===null) return;
+  if(!reason.trim()){ toast('A reason is required to void a sale','error'); return; }
+  if(!confirm('Void sale '+saleId+'? Stock will be restored and the original transaction retained. This cannot be undone.')) return;
+  const now = Date.now();
   sale.voided = true;
   sale.voidedBy = currentUser.name;
-  sale.voidedAt = Date.now();
-  sale.updatedAt = Date.now();
+  sale.voidedAt = now;
+  sale.voidReason = reason.trim();
+  sale.updatedAt = now;
   if(sale.balanceDue>0){
     const cust = DB.customers.find(c=>c.id===sale.customerId);
     if(cust){ cust.balance = Math.max(0, (cust.balance||0) - sale.balanceDue); cust.updatedAt = Date.now(); }
@@ -2747,7 +2767,7 @@ let expenseFilter = { category:'', search:'' };
 
 function renderExpenses(){
   const view = document.getElementById('view');
-  const activeExpenses = DB.expenses.filter(e=>!e.deleted);
+  const activeExpenses = DB.expenses.filter(e=>!e.voided);
   const total = activeExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
   view.innerHTML = `
     <div class="stat-grid">
@@ -2784,7 +2804,7 @@ function renderExpenses(){
 }
 function renderExpenseTable(){
   const wrap = document.getElementById('expense-table-wrap');
-  let list = DB.expenses.filter(e=>!e.deleted).sort((a,b)=>recordTime(b)-recordTime(a) || b.createdAt-a.createdAt).filter(e=>{
+  let list = [...DB.expenses].sort((a,b)=>recordTime(b)-recordTime(a) || b.createdAt-a.createdAt).filter(e=>{
     if(expenseFilter.category && e.category!==expenseFilter.category) return false;
     if(expenseFilter.search){
       const q = expenseFilter.search.toLowerCase();
@@ -2893,13 +2913,23 @@ function saveExpense(){
   toast('Expense recorded','success');
   renderExpenses();
 }
-function deleteExpense(id){
-  if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
-  if(!confirm('Delete this expense record? This cannot be undone.')) return;
+function voidExpense(id){
+  if(!isAdmin()){ toast('Only an admin can void expense records.','error'); return; }
   const e = DB.expenses.find(x=>x.id===id);
-  if(e){ e.deleted = true; e.updatedAt = Date.now(); }
+  if(!e || e.voided) return;
+  const reason = prompt('Enter the reason for voiding expense "'+e.description+'" ('+money(e.amount)+'):');
+  if(reason===null) return;
+  if(!reason.trim()){ toast('A reason is required to void an expense','error'); return; }
+  if(!confirm('Void this expense? The original record will remain visible and be excluded from totals and reports.')) return;
+  const now = Date.now();
+  e.voided = true;
+  e.voidedBy = currentUser.name;
+  e.voidedAt = now;
+  e.voidReason = reason.trim();
+  e.updatedAt = now;
   saveDB();
-  renderExpenseTable();
+  toast('Expense voided — record retained in audit trail','info');
+  renderExpenses();
 }
 function addExpenseCategory(){
   const input = document.getElementById('new-exp-cat');
@@ -2913,7 +2943,7 @@ function addExpenseCategory(){
 }
 function deleteExpenseCategory(cat){
   if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
-  if(DB.expenses.some(e=>e.category===cat && !e.deleted)){ toast('Cannot delete — expenses use this category','error'); return; }
+  if(DB.expenses.some(e=>e.category===cat)){ toast('Cannot delete — historical expenses use this category','error'); return; }
   DB.expenseCategories = DB.expenseCategories.filter(c=>c!==cat);
   DB.meta.settingsUpdatedAt = Date.now();
   saveDB();
@@ -3059,7 +3089,7 @@ function getOverviewData(range){
   const itemsSold = validSales.reduce((n,s)=>n+s.items.reduce((m,i)=>m+i.qty,0),0);
   const inventoryValue = DB.products.filter(p=>p.active!==false).reduce((s,p)=>s+p.costPrice*p.stock,0);
   const totalOutstanding = validSales.reduce((s,x)=>s+(x.balanceDue||0),0);
-  const expenses = DB.expenses.filter(e=>!e.deleted && inR(recordTime(e)));
+  const expenses = DB.expenses.filter(e=>!e.voided && inR(recordTime(e)));
   const totalExpenses = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
   const totalSalaries = DB.salaryPayments.filter(sp=>inR(recordTime(sp))).reduce((s,sp)=>s+Number(sp.amountPaid||0),0);
   const supplies = DB.supplies.filter(x=>!x.voided && inR(recordTime(x)));
@@ -3275,7 +3305,7 @@ function exportCSV(type){
     DB.movements.filter(m=>inR(m.createdAt)).forEach(m=>rows.push([new Date(m.createdAt).toLocaleString('en-GB'), m.productName, m.type, m.qty, m.reason, m.userName]));
   }else if(type==='expenses'){
     rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By']);
-    DB.expenses.filter(e=>!e.deleted && inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy]));
+    DB.expenses.filter(e=>inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy, e.voided?'VOIDED':'ACTIVE', e.voidedBy||'', e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'', e.voidReason||'']));
   }else if(type==='payroll'){
     rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By']);
     DB.salaryPayments.filter(sp=>inR(recordTime(sp))).forEach(sp=>{
