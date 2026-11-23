@@ -447,7 +447,22 @@ function defaultDB(){
 function loadDB(){
   try{
     const raw = localStorage.getItem(DB_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw){
+      const data = JSON.parse(raw);
+      let migrated = false;
+      (data.expenses||[]).forEach(e=>{
+        if(e.deleted && !e.voided){
+          e.voided = true;
+          e.voidReason = 'Legacy deleted record migrated to void status';
+          e.voidedBy = e.recordedBy || 'System migration';
+          e.voidedAt = e.updatedAt || e.createdAt || Date.now();
+          e.updatedAt = e.voidedAt;
+          migrated = true;
+        }
+      });
+      if(migrated) localStorage.setItem(DB_KEY, JSON.stringify(data));
+      return data;
+    }
   }catch(e){ console.error('DB load failed', e); }
   return null;
 }
@@ -1887,7 +1902,7 @@ function renderSalesTable(){
             <td style="font-weight:700;">${money(s.total)}</td>
             <td style="text-transform:capitalize;">${s.paymentMethod==='momo'?'MTN MoMo':s.paymentMethod==='om'?'Orange Money':s.paymentMethod==='credit'?'On Credit':'Cash'}</td>
             <td>${s.cashierName}</td>
-            <td>${s.voided?'<span class="pill pill-red">Voided</span>':(s.balanceDue>0?(s.amountPaid<=0?`<span class="pill pill-red">On Credit — ${money(s.balanceDue)} owed</span>`:`<span class="pill pill-amber">Partial — ${money(s.balanceDue)} owed</span>`):'<span class="pill pill-green">Completed</span>')}</td>
+            <td>${s.voided?`<span class="pill pill-red">Voided</span><div style="font-size:10.5px;color:var(--ink-dim);margin-top:4px;">By ${s.voidedBy||'—'} · ${s.voidedAt?new Date(s.voidedAt).toLocaleString('en-GB'):'—'}<br>${s.voidReason||'No reason recorded'}</div>`:(s.balanceDue>0?(s.amountPaid<=0?`<span class="pill pill-red">On Credit — ${money(s.balanceDue)} owed</span>`:`<span class="pill pill-amber">Partial — ${money(s.balanceDue)} owed</span>`):'<span class="pill pill-green">Completed</span>')}</td>
             <td>
               <div style="display:flex;gap:6px;">
                 <button class="icon-btn" title="View receipt" onclick="showReceipt('${s.id}')">${ICONS.print}</button>
@@ -1923,11 +1938,16 @@ function voidSale(saleId){
   if(!isAdmin()){ toast('Only an admin can void records.','error'); return; }
   const sale = DB.sales.find(s=>s.id===saleId);
   if(!sale || sale.voided) return;
-  if(!confirm(`Void sale ${saleId}? This will restore stock for all items. This cannot be undone.`)) return;
+  const reason = prompt('Enter the reason for voiding sale '+saleId+':');
+  if(reason===null) return;
+  if(!reason.trim()){ toast('A reason is required to void a sale','error'); return; }
+  if(!confirm('Void sale '+saleId+'? Stock will be restored and the original transaction retained. This cannot be undone.')) return;
+  const now = Date.now();
   sale.voided = true;
   sale.voidedBy = currentUser.name;
-  sale.voidedAt = Date.now();
-  sale.updatedAt = Date.now();
+  sale.voidedAt = now;
+  sale.voidReason = reason.trim();
+  sale.updatedAt = now;
   if(sale.balanceDue>0){
     const cust = DB.customers.find(c=>c.id===sale.customerId);
     if(cust){ cust.balance = Math.max(0, (cust.balance||0) - sale.balanceDue); cust.updatedAt = Date.now(); }
@@ -2747,12 +2767,14 @@ let expenseFilter = { category:'', search:'' };
 
 function renderExpenses(){
   const view = document.getElementById('view');
-  const activeExpenses = DB.expenses.filter(e=>!e.deleted);
+  const allExpenses = DB.expenses;
+  const activeExpenses = allExpenses.filter(e=>!e.voided);
   const total = activeExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
+  const voidedExpenses = allExpenses.length-activeExpenses.length;
   view.innerHTML = `
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Total Expenses (All Time)</div><div class="stat-value" style="color:var(--red-500);">${money(total)}</div></div>
-      <div class="stat-card"><div class="stat-label">Records</div><div class="stat-value">${activeExpenses.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Active / Voided Records</div><div class="stat-value">${activeExpenses.length} / ${voidedExpenses}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head"><div class="card-title">Expense Categories</div></div>
@@ -2784,7 +2806,7 @@ function renderExpenses(){
 }
 function renderExpenseTable(){
   const wrap = document.getElementById('expense-table-wrap');
-  let list = DB.expenses.filter(e=>!e.deleted).sort((a,b)=>recordTime(b)-recordTime(a) || b.createdAt-a.createdAt).filter(e=>{
+  let list = [...DB.expenses].sort((a,b)=>recordTime(b)-recordTime(a) || b.createdAt-a.createdAt).filter(e=>{
     if(expenseFilter.category && e.category!==expenseFilter.category) return false;
     if(expenseFilter.search){
       const q = expenseFilter.search.toLowerCase();
@@ -2794,7 +2816,7 @@ function renderExpenseTable(){
   });
   wrap.innerHTML = `
     <table>
-      <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Vendor</th><th>Method</th><th>Amount</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Vendor</th><th>Method</th><th>Amount</th><th>Status / Audit</th><th></th></tr></thead>
       <tbody>
         ${list.map(e=>`
           <tr class="tr-hover">
@@ -2803,15 +2825,16 @@ function renderExpenseTable(){
             <td><span class="pill pill-gray">${e.category}</span></td>
             <td>${e.vendor||'—'}</td>
             <td style="text-transform:capitalize;">${e.method==='momo'?'MTN MoMo':e.method==='om'?'Orange Money':e.method==='bank'?'Bank Transfer':'Cash'}</td>
-            <td style="font-weight:700;">${money(e.amount)}</td>
+            <td style="font-weight:700;color:${e.voided?'var(--ink-dim)':'inherit'};">${money(e.amount)}</td>
+            <td>${e.voided?`<span class="pill pill-red">Voided</span><div style="font-size:10.5px;color:var(--ink-dim);margin-top:4px;">By ${e.voidedBy||'—'} · ${e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'—'}<br>${e.voidReason||'No reason recorded'}</div>`:'<span class="pill pill-green">Active</span>'}</td>
             <td>
               <div style="display:flex;gap:6px;">
                 <button class="icon-btn" title="View / Print" onclick="viewExpense('${e.id}')">${ICONS.print}</button>
-                ${isAdmin()?`<button class="icon-btn" onclick="deleteExpense('${e.id}')">${ICONS.trash}</button>`:''}
+                ${isAdmin()&&!e.voided?`<button class="icon-btn" title="Void expense" onclick="voidExpense('${e.id}')">${ICONS.x}</button>`:''}
               </div>
             </td>
           </tr>
-        `).join('') || `<tr><td colspan="7"><div class="empty-state">${ICONS.expenses}<div>No expenses match your filters</div></div></td></tr>`}
+        `).join('') || `<tr><td colspan="8"><div class="empty-state">${ICONS.expenses}<div>No expenses match your filters</div></div></td></tr>`}
       </tbody>
     </table>
   `;
@@ -2832,6 +2855,8 @@ function viewExpense(id){
       <div class="row"><span>Category</span><span>${e.category}</span></div>
       <div class="row"><span>Description</span><span>${e.description}</span></div>
       ${e.vendor ? `<div class="row"><span>Vendor / Payee</span><span>${e.vendor}</span></div>` : ''}
+      <div class="row"><span>Status</span><span>${e.voided?'VOIDED':'ACTIVE'}</span></div>
+      ${e.voided?`<div class="row"><span>Voided By</span><span>${e.voidedBy||'—'}</span></div><div class="row"><span>Voided At</span><span>${e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'—'}</span></div><div class="row"><span>Void Reason</span><span>${e.voidReason||'—'}</span></div>`:''}
       <div class="row"><span>Payment Method</span><span>${e.method==='momo'?'MTN MoMo':e.method==='om'?'Orange Money':e.method==='bank'?'Bank Transfer':'Cash'}</span></div>
       <div class="row"><span>Recorded By</span><span>${e.recordedBy}</span></div>
       <div class="divider"></div>
@@ -2893,13 +2918,23 @@ function saveExpense(){
   toast('Expense recorded','success');
   renderExpenses();
 }
-function deleteExpense(id){
-  if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
-  if(!confirm('Delete this expense record? This cannot be undone.')) return;
+function voidExpense(id){
+  if(!isAdmin()){ toast('Only an admin can void expense records.','error'); return; }
   const e = DB.expenses.find(x=>x.id===id);
-  if(e){ e.deleted = true; e.updatedAt = Date.now(); }
+  if(!e || e.voided) return;
+  const reason = prompt('Enter the reason for voiding expense "'+e.description+'" ('+money(e.amount)+'):');
+  if(reason===null) return;
+  if(!reason.trim()){ toast('A reason is required to void an expense','error'); return; }
+  if(!confirm('Void this expense? The original record will remain visible and be excluded from totals and reports.')) return;
+  const now = Date.now();
+  e.voided = true;
+  e.voidedBy = currentUser.name;
+  e.voidedAt = now;
+  e.voidReason = reason.trim();
+  e.updatedAt = now;
   saveDB();
-  renderExpenseTable();
+  toast('Expense voided — record retained in audit trail','info');
+  renderExpenses();
 }
 function addExpenseCategory(){
   const input = document.getElementById('new-exp-cat');
@@ -2913,7 +2948,7 @@ function addExpenseCategory(){
 }
 function deleteExpenseCategory(cat){
   if(!isAdmin()){ toast('Only an admin can delete expense records.','error'); return; }
-  if(DB.expenses.some(e=>e.category===cat && !e.deleted)){ toast('Cannot delete — expenses use this category','error'); return; }
+  if(DB.expenses.some(e=>e.category===cat)){ toast('Cannot delete — historical expenses use this category','error'); return; }
   DB.expenseCategories = DB.expenseCategories.filter(c=>c!==cat);
   DB.meta.settingsUpdatedAt = Date.now();
   saveDB();
@@ -3059,8 +3094,9 @@ function getOverviewData(range){
   const itemsSold = validSales.reduce((n,s)=>n+s.items.reduce((m,i)=>m+i.qty,0),0);
   const inventoryValue = DB.products.filter(p=>p.active!==false).reduce((s,p)=>s+p.costPrice*p.stock,0);
   const totalOutstanding = validSales.reduce((s,x)=>s+(x.balanceDue||0),0);
-  const expenses = DB.expenses.filter(e=>!e.deleted && inR(recordTime(e)));
+  const expenses = DB.expenses.filter(e=>!e.voided && inR(recordTime(e)));
   const totalExpenses = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+  const voidedExpenses = DB.expenses.filter(e=>e.voided && inR(recordTime(e))).length;
   const totalSalaries = DB.salaryPayments.filter(sp=>inR(recordTime(sp))).reduce((s,sp)=>s+Number(sp.amountPaid||0),0);
   const supplies = DB.supplies.filter(x=>!x.voided && inR(recordTime(x)));
   const totalSupplyRecordedCost = supplies.reduce((s,x)=>s+(x.recordedCost!=null?x.recordedCost:x.totalCost),0);
@@ -3090,7 +3126,7 @@ function getOverviewData(range){
   const unitsIn = moves.filter(m=>mvDelta(m)>0).reduce((s,m)=>s+mvDelta(m),0);
   const unitsOut = moves.filter(m=>mvDelta(m)<0).reduce((s,m)=>s-mvDelta(m),0);
   return {validSales, voidedCount, totalRevenue, totalCost, totalProfit, collected, itemsSold, inventoryValue, totalOutstanding,
-    totalExpenses, totalSalaries, totalSupplyRecordedCost, totalSupplyBonus, totalSupplierCredit, cashInHand, netPosition,
+    totalExpenses, voidedExpenses, totalSalaries, totalSupplyRecordedCost, totalSupplyBonus, totalSupplierCredit, cashInHand, netPosition,
     paymentBreakdown, catList, topProducts, expList, supplies, moveCount:moves.length, unitsIn, unitsOut};
 }
 
@@ -3274,8 +3310,8 @@ function exportCSV(type){
     rows.push(['Date','Product','Type','Qty','Reason','User']);
     DB.movements.filter(m=>inR(m.createdAt)).forEach(m=>rows.push([new Date(m.createdAt).toLocaleString('en-GB'), m.productName, m.type, m.qty, m.reason, m.userName]));
   }else if(type==='expenses'){
-    rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By']);
-    DB.expenses.filter(e=>!e.deleted && inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy]));
+    rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By','Status','Voided By','Voided At','Void Reason']);
+    DB.expenses.filter(e=>inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy, e.voided?'VOIDED':'ACTIVE', e.voidedBy||'', e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'', e.voidReason||'']));
   }else if(type==='payroll'){
     rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By']);
     DB.salaryPayments.filter(sp=>inR(recordTime(sp))).forEach(sp=>{
