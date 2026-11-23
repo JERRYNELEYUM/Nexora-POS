@@ -2767,7 +2767,8 @@ let expenseFilter = { category:'', search:'' };
 
 function renderExpenses(){
   const view = document.getElementById('view');
-  const activeExpenses = DB.expenses.filter(e=>!e.voided);
+  const allExpenses = DB.expenses;
+  const activeExpenses = allExpenses.filter(e=>!e.voided);
   const total = activeExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
   const voidedExpenses = allExpenses.length-activeExpenses.length;
   view.innerHTML = `
