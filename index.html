@@ -564,7 +564,7 @@ function monthLabel(key){
 function staffMonthStatus(staffId, monthKey){
   const staff = DB.staff.find(x=>x.id===staffId);
   const due = staff ? Number(staff.monthlySalary||0) : 0;
-  const paid = DB.salaryPayments.filter(p=>p.staffId===staffId && p.month===monthKey).reduce((s,p)=>s+Number(p.amountPaid||0),0);
+  const paid = DB.salaryPayments.filter(p=>p.staffId===staffId && p.month===monthKey && !p.voided).reduce((s,p)=>s+Number(p.amountPaid||0),0);
   return { due, paid, remaining: Math.max(0, due-paid) };
 }
 function todayLocalISO(){
@@ -1860,6 +1860,7 @@ function renderDashboard(){
    ============================================================ */
 let salesSearch = '';
 let salesDateFilter = 'today';
+let salesStatusFilter = 'all';
 
 function renderSales(){
   const view = document.getElementById('view');
@@ -1872,6 +1873,9 @@ function renderSales(){
           <option value="week" ${salesDateFilter==='week'?'selected':''}>Last 7 Days</option>
           <option value="month" ${salesDateFilter==='month'?'selected':''}>Last 30 Days</option>
           <option value="all" ${salesDateFilter==='all'?'selected':''}>All Time</option>
+        </select>
+        <select id="sales-status-filter" onchange="salesStatusFilter=this.value;renderSalesTable();" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;">
+          <option value="all" ${salesStatusFilter==='all'?'selected':''}>All Payment Statuses</option><option value="paid" ${salesStatusFilter==='paid'?'selected':''}>Paid / Completed</option><option value="partial" ${salesStatusFilter==='partial'?'selected':''}>Partially Paid</option><option value="credit" ${salesStatusFilter==='credit'?'selected':''}>On Credit</option><option value="voided" ${salesStatusFilter==='voided'?'selected':''}>Voided</option>
         </select>
       </div>
       <div id="sales-table-wrap" style="overflow-x:auto;"></div>
@@ -1887,6 +1891,13 @@ function renderSalesTable(){
   if(salesDateFilter==='today') list = list.filter(s=>isToday(saleDisplayTime(s)));
   else if(salesDateFilter!=='all') list = list.filter(s=>now-saleDisplayTime(s)<=cutoffs[salesDateFilter]);
   if(salesSearch.trim()) list = list.filter(s=>s.id.toLowerCase().includes(salesSearch.trim().toLowerCase()));
+  if(salesStatusFilter!=='all') list = list.filter(s=>{
+    if(salesStatusFilter==='voided') return !!s.voided;
+    if(s.voided) return false;
+    if(salesStatusFilter==='credit') return Number(s.amountPaid||0)<=0 && Number(s.balanceDue||0)>0;
+    if(salesStatusFilter==='partial') return Number(s.amountPaid||0)>0 && Number(s.balanceDue||0)>0;
+    return Number(s.balanceDue||0)<=0;
+  });
 
   const total = list.filter(s=>!s.voided).reduce((s,x)=>s+x.total,0);
 
@@ -2166,6 +2177,10 @@ function renderSuppliers(){
       </table>
       </div>
     </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head" style="flex-wrap:wrap;gap:10px;"><div class="card-title">Supplier Payment History</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><div class="search-box" style="width:210px;">${ICONS.search}<input type="text" placeholder="Search supplier or reference..." value="${supplierPaymentFilter.search}" oninput="supplierPaymentFilter.search=this.value;renderSupplierPaymentTable();"></div><select onchange="supplierPaymentFilter.status=this.value;renderSupplierPaymentTable();" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;"><option value="all" ${supplierPaymentFilter.status==='all'?'selected':''}>All Payment Statuses</option><option value="active" ${supplierPaymentFilter.status==='active'?'selected':''}>Active</option><option value="voided" ${supplierPaymentFilter.status==='voided'?'selected':''}>Voided</option></select></div></div>
+      <div id="supplier-payment-table-wrap" style="overflow-x:auto;"></div>
+    </div>
     <div class="card">
       <div class="card-head"><div class="card-title">Recent Supplier Deliveries</div></div>
       <div style="overflow-x:auto;">
@@ -2265,6 +2280,23 @@ function voidSupply(id){
   saveDB();
   toast(lowStockWarnings.length ? `Delivery voided — stock now negative for: ${lowStockWarnings.join(', ')}` : 'Delivery voided, stock reversed', lowStockWarnings.length?'error':'info');
   renderSuppliers();
+}
+function renderSupplierPaymentTable(){
+  const wrap=document.getElementById('supplier-payment-table-wrap'); if(!wrap) return;
+  const q=supplierPaymentFilter.search.trim().toLowerCase();
+  const list=[...DB.supplierPayments].filter(p=>supplierPaymentFilter.status==='all'||(supplierPaymentFilter.status==='voided'?!!p.voided:!p.voided)).filter(p=>!q||(p.supplierName||'').toLowerCase().includes(q)||(p.id||'').toLowerCase().includes(q)).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  wrap.innerHTML=`<table><thead><tr><th>Date</th><th>Reference</th><th>Supplier</th><th>Amount</th><th>Method</th><th>Note</th><th>Recorded By</th><th>Status / Audit</th><th></th></tr></thead><tbody>${list.map(p=>`<tr class="tr-hover"><td>${new Date(p.createdAt).toLocaleString('en-GB')}</td><td style="font-weight:700;">${p.id}</td><td>${p.supplierName||'—'}</td><td style="font-weight:700;">${money(p.amount)}</td><td>${p.method==='momo'?'MTN MoMo':p.method==='om'?'Orange Money':p.method==='bank'?'Bank Transfer':'Cash'}</td><td>${p.note||'—'}</td><td>${p.recordedBy||'—'}</td><td>${p.voided?`<span class="pill pill-red">Voided</span><div style="font-size:10.5px;color:var(--ink-dim);margin-top:4px;">By ${p.voidedBy||'—'} · ${p.voidedAt?new Date(p.voidedAt).toLocaleString('en-GB'):'—'}<br>${p.voidReason||'No reason recorded'}</div>`:'<span class="pill pill-green">Active</span>'}</td><td>${isAdmin()&&!p.voided?`<button class="icon-btn" title="Void supplier payment" onclick="voidSupplierPayment('${p.id}')">${ICONS.x}</button>`:''}</td></tr>`).join('')||'<tr><td colspan="9"><div class="empty-state">No supplier payments match this filter</div></td></tr>'}</tbody></table>`;
+}
+function voidSupplierPayment(id){
+  if(!isAdmin()){toast('Only an admin can void supplier payments.','error');return;}
+  const p=DB.supplierPayments.find(x=>x.id===id); if(!p||p.voided)return;
+  const reason=prompt('Enter the reason for voiding supplier payment '+id+':'); if(reason===null)return;
+  if(!reason.trim()){toast('A reason is required to void a supplier payment','error');return;}
+  if(!confirm('Void this supplier payment? The supplier balance will be increased by the payment amount and the original payment retained.'))return;
+  const now=Date.now(); const supplier=DB.suppliers.find(x=>x.id===p.supplierId);
+  if(supplier){supplier.balance=Number(supplier.balance||0)+Number(p.amount||0);supplier.updatedAt=now;}
+  p.voided=true;p.voidedBy=currentUser.name;p.voidedAt=now;p.voidReason=reason.trim();p.updatedAt=now;
+  saveDB();toast('Supplier payment voided — supplier balance reversed','info');renderSuppliers();
 }
 function openSupplierPaymentModal(supplierId){
   const s = DB.suppliers.find(x=>x.id===supplierId);
@@ -2536,7 +2568,7 @@ function renderPayroll(){
   const view = document.getElementById('view');
   const activeStaff = DB.staff.filter(s=>s.status==='active' && !s.deleted);
   const totalMonthly = activeStaff.reduce((a,s)=>a+Number(s.monthlySalary||0),0);
-  const paidAllTime = DB.salaryPayments.reduce((a,s)=>a+Number(s.amountPaid||0),0);
+  const paidAllTime = DB.salaryPayments.filter(p=>!p.voided).reduce((a,s)=>a+Number(s.amountPaid||0),0);
   const cm = currentMonthKey();
 
   view.innerHTML = `
@@ -2577,12 +2609,12 @@ function renderPayroll(){
       </div>
     </div>
     <div class="card">
-      <div class="card-head"><div class="card-title">Recent Salary Payments</div></div>
+      <div class="card-head" style="flex-wrap:wrap;gap:10px;"><div class="card-title">Salary Payment History</div><select onchange="payrollPaymentFilter=this.value;renderPayroll();" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;"><option value="all" ${payrollPaymentFilter==='all'?'selected':''}>All Payment Statuses</option><option value="active" ${payrollPaymentFilter==='active'?'selected':''}>Active</option><option value="voided" ${payrollPaymentFilter==='voided'?'selected':''}>Voided</option></select></div>
       <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Staff</th><th>Month</th><th>Due</th><th>Paid</th><th>Balance After</th><th>Method</th><th>Date</th><th></th></tr></thead>
+          <thead><tr><th>Staff</th><th>Month</th><th>Due</th><th>Paid</th><th>Balance After</th><th>Method</th><th>Date</th><th>Status / Audit</th><th></th></tr></thead>
           <tbody>
-            ${[...DB.salaryPayments].sort((a,b)=>b.createdAt-a.createdAt).slice(0,15).map(sp=>{
+            ${[...DB.salaryPayments].filter(sp=>payrollPaymentFilter==='all'||(payrollPaymentFilter==='voided'?!!sp.voided:!sp.voided)).sort((a,b)=>b.createdAt-a.createdAt).map(sp=>{
               const st = DB.staff.find(x=>x.id===sp.staffId);
               const ms = staffMonthStatus(sp.staffId, sp.month);
               return `<tr class="tr-hover">
@@ -2591,11 +2623,11 @@ function renderPayroll(){
                 <td>${money(sp.amountDue)}</td>
                 <td style="font-weight:700;">${money(sp.amountPaid)}</td>
                 <td>${ms.remaining<=0?`<span class="pill pill-green">Settled</span>`:`<span class="pill pill-amber">${money(ms.remaining)}</span>`}</td>
-                <td style="text-transform:capitalize;">${sp.method}</td>
-                <td style="color:var(--ink-dim);">${new Date(sp.createdAt).toLocaleDateString('en-GB')}</td>
-                <td><button class="icon-btn" title="View / Print" onclick="viewSalaryPayment('${sp.id}')">${ICONS.print}</button></td>
+                <td style="text-transform:capitalize;">${sp.method}</td><td style="color:var(--ink-dim);">${new Date(sp.createdAt).toLocaleDateString('en-GB')}</td>
+                <td>${sp.voided?`<span class="pill pill-red">Voided</span><div style="font-size:10.5px;color:var(--ink-dim);margin-top:4px;">By ${sp.voidedBy||'—'} · ${sp.voidedAt?new Date(sp.voidedAt).toLocaleString('en-GB'):'—'}<br>${sp.voidReason||'No reason recorded'}</div>`:'<span class="pill pill-green">Active</span>'}</td>
+                <td><div style="display:flex;gap:6px;"><button class="icon-btn" title="View / Print" onclick="viewSalaryPayment('${sp.id}')">${ICONS.print}</button>${!sp.voided?`<button class="icon-btn" title="Void salary payment" onclick="voidSalaryPayment('${sp.id}')">${ICONS.x}</button>`:''}</div></td>
               </tr>`;
-            }).join('') || `<tr><td colspan="8"><div class="empty-state">${ICONS.payroll}<div>No salary payments recorded yet</div></div></td></tr>`}
+            }).join('') || `<tr><td colspan="9"><div class="empty-state">${ICONS.payroll}<div>No salary payments match this filter</div></div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -2720,6 +2752,17 @@ function saveSalaryPayment(staffId){
   toast(isAdvance ? `Advance payment recorded for ${monthLabel(month)}` : 'Salary payment recorded','success');
   renderPayroll();
 }
+function voidSalaryPayment(id){
+  if(!isAdmin()){ toast('Only an admin can void payroll records.','error'); return; }
+  const sp = DB.salaryPayments.find(x=>x.id===id);
+  if(!sp || sp.voided) return;
+  const reason = prompt('Enter the reason for voiding salary payment '+id+':');
+  if(reason===null) return;
+  if(!reason.trim()){ toast('A reason is required to void a salary payment','error'); return; }
+  if(!confirm('Void this salary payment? It will remain in history but will no longer count toward salary paid or monthly balances.')) return;
+  const now = Date.now(); sp.voided=true; sp.voidedBy=currentUser.name; sp.voidedAt=now; sp.voidReason=reason.trim(); sp.updatedAt=now;
+  saveDB(); toast('Salary payment voided — audit record retained','info'); renderPayroll();
+}
 function viewSalaryPayment(id){
   const sp = DB.salaryPayments.find(x=>x.id===id);
   if(!sp) return;
@@ -2732,6 +2775,7 @@ function viewSalaryPayment(id){
       ${DB.meta.phone ? `<div class="center">Tel: ${DB.meta.phone}</div>` : ''}
       <div class="divider"></div>
       <div class="center" style="font-weight:700;">SALARY PAYMENT SLIP${sp.isAdvance?' (ADVANCE)':''}</div>
+      ${sp.voided?`<div class="center" style="font-weight:800;color:#c0392b;">*** VOIDED ***</div><div class="row"><span>Voided By</span><span>${sp.voidedBy||'—'}</span></div><div class="row"><span>Voided At</span><span>${sp.voidedAt?new Date(sp.voidedAt).toLocaleString('en-GB'):'—'}</span></div><div class="row"><span>Void Reason</span><span>${sp.voidReason||'—'}</span></div>`:''}
       <div class="divider"></div>
       <div class="row"><span>Reference</span><span>${sp.id}</span></div>
       <div class="row"><span>Staff</span><span>${st?st.name:'—'}</span></div>
@@ -2763,7 +2807,9 @@ function viewSalaryPayment(id){
 /* ============================================================
    EXPENSES ("SPENDING") MODULE
    ============================================================ */
-let expenseFilter = { category:'', search:'' };
+let expenseFilter = { category:'', search:'', status:'all' };
+let supplierPaymentFilter = { search:'', status:'all' };
+let payrollPaymentFilter = 'all';
 
 function renderExpenses(){
   const view = document.getElementById('view');
@@ -2796,6 +2842,7 @@ function renderExpenses(){
             <option value="">All Categories</option>
             ${DB.expenseCategories.map(c=>`<option ${expenseFilter.category===c?'selected':''}>${c}</option>`).join('')}
           </select>
+          <select onchange="expenseFilter.status=this.value;renderExpenseTable();" style="padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;"><option value="all" ${expenseFilter.status==='all'?'selected':''}>All Payment Statuses</option><option value="active" ${expenseFilter.status==='active'?'selected':''}>Active</option><option value="voided" ${expenseFilter.status==='voided'?'selected':''}>Voided</option></select>
         </div>
         <button class="btn btn-teal" onclick="openExpenseModal()">${ICONS.plus} Record Expense</button>
       </div>
@@ -2808,6 +2855,8 @@ function renderExpenseTable(){
   const wrap = document.getElementById('expense-table-wrap');
   let list = [...DB.expenses].sort((a,b)=>recordTime(b)-recordTime(a) || b.createdAt-a.createdAt).filter(e=>{
     if(expenseFilter.category && e.category!==expenseFilter.category) return false;
+    if(expenseFilter.status==='active' && e.voided) return false;
+    if(expenseFilter.status==='voided' && !e.voided) return false;
     if(expenseFilter.search){
       const q = expenseFilter.search.toLowerCase();
       if(!e.description.toLowerCase().includes(q) && !(e.vendor||'').toLowerCase().includes(q)) return false;
@@ -3097,7 +3146,7 @@ function getOverviewData(range){
   const expenses = DB.expenses.filter(e=>!e.voided && inR(recordTime(e)));
   const totalExpenses = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
   const voidedExpenses = DB.expenses.filter(e=>e.voided && inR(recordTime(e))).length;
-  const totalSalaries = DB.salaryPayments.filter(sp=>inR(recordTime(sp))).reduce((s,sp)=>s+Number(sp.amountPaid||0),0);
+  const totalSalaries = DB.salaryPayments.filter(sp=>!sp.voided && inR(recordTime(sp))).reduce((s,sp)=>s+Number(sp.amountPaid||0),0);
   const supplies = DB.supplies.filter(x=>!x.voided && inR(recordTime(x)));
   const totalSupplyRecordedCost = supplies.reduce((s,x)=>s+(x.recordedCost!=null?x.recordedCost:x.totalCost),0);
   const totalSupplyBonus = supplies.reduce((s,x)=>s+(x.bonus||0),0);
@@ -3301,8 +3350,8 @@ function exportCSV(type){
   const range = periodRange(rptFilter);
   const inR = t=>inRange(t, range);
   if(type==='sales'){
-    rows.push(['Receipt','Date','Items','Total (XAF)','Payment Method','Amount Paid','Balance Owed','Cashier','Status']);
-    DB.sales.filter(s=>inR(saleDisplayTime(s))).forEach(s=>rows.push([s.id, new Date(saleDisplayTime(s)).toLocaleString('en-GB'), s.items.reduce((n,i)=>n+i.qty,0), s.total, s.paymentMethod, s.amountPaid!=null?s.amountPaid:s.total, s.balanceDue||0, s.cashierName, s.voided?'Voided':'Completed']));
+    rows.push(['Receipt','Date','Items','Total (XAF)','Payment Method','Amount Paid','Balance Owed','Cashier','Status','Voided By','Voided At','Void Reason']);
+    DB.sales.filter(s=>inR(saleDisplayTime(s))).forEach(s=>rows.push([s.id, new Date(saleDisplayTime(s)).toLocaleString('en-GB'), s.items.reduce((n,i)=>n+i.qty,0), s.total, s.paymentMethod, s.amountPaid!=null?s.amountPaid:s.total, s.balanceDue||0, s.cashierName, s.voided?'Voided':(s.balanceDue>0?(s.amountPaid>0?'Partial':'On Credit'):'Paid'),s.voidedBy||'',s.voidedAt?new Date(s.voidedAt).toLocaleString('en-GB'):'',s.voidReason||'']));
   }else if(type==='products'){
     rows.push(['Name','Category','SKU','Cost Price','Sell Price','Stock','Reorder Level']);
     DB.products.filter(p=>p.active!==false).forEach(p=>rows.push([p.name, p.category, p.sku, p.costPrice, p.sellPrice, p.stock, p.reorderLevel]));
@@ -3313,11 +3362,11 @@ function exportCSV(type){
     rows.push(['Date','Description','Category','Vendor','Method','Amount (XAF)','Recorded By','Status','Voided By','Voided At','Void Reason']);
     DB.expenses.filter(e=>inR(recordTime(e))).forEach(e=>rows.push([recordDateLabel(e), e.description, e.category, e.vendor||'', e.method, e.amount, e.recordedBy, e.voided?'VOIDED':'ACTIVE', e.voidedBy||'', e.voidedAt?new Date(e.voidedAt).toLocaleString('en-GB'):'', e.voidReason||'']));
   }else if(type==='payroll'){
-    rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By']);
+    rows.push(['Staff','Month','Amount Due','Amount Paid','Balance After','Advance','Method','Date','Recorded By','Status','Voided By','Voided At','Void Reason']);
     DB.salaryPayments.filter(sp=>inR(recordTime(sp))).forEach(sp=>{
       const st = DB.staff.find(x=>x.id===sp.staffId);
       const ms = staffMonthStatus(sp.staffId, sp.month);
-      rows.push([st?st.name:'—', monthLabel(sp.month), sp.amountDue, sp.amountPaid, ms.remaining, sp.isAdvance?'Yes':'No', sp.method, new Date(sp.createdAt).toLocaleString('en-GB'), sp.recordedBy]);
+      rows.push([st?st.name:'—', monthLabel(sp.month), sp.amountDue, sp.amountPaid, ms.remaining, sp.isAdvance?'Yes':'No', sp.method, new Date(sp.createdAt).toLocaleString('en-GB'), sp.recordedBy, sp.voided?'VOIDED':'ACTIVE', sp.voidedBy||'', sp.voidedAt?new Date(sp.voidedAt).toLocaleString('en-GB'):'', sp.voidReason||'']);
     });
   }else if(type==='supplies'){
     rows.push(['Date','Supplier','Product','Qty','Unit Cost','Line Total','Delivery Total','Bonus','Paid Now','Credit','Recorded By','Status']);
@@ -3330,8 +3379,8 @@ function exportCSV(type){
     rows.push(['Date','Customer','Amount','Method','Note','Recorded By']);
     DB.customerPayments.filter(p=>inR(p.createdAt)).forEach(p=>rows.push([new Date(p.createdAt).toLocaleString('en-GB'), p.customerName, p.amount, p.method, p.note||'', p.recordedBy]));
   }else if(type==='supplierPayments'){
-    rows.push(['Date','Supplier','Amount','Method','Note','Recorded By']);
-    DB.supplierPayments.filter(p=>inR(p.createdAt)).forEach(p=>rows.push([new Date(p.createdAt).toLocaleString('en-GB'), p.supplierName, p.amount, p.method, p.note||'', p.recordedBy]));
+    rows.push(['Date','Reference','Supplier','Amount','Method','Note','Recorded By','Status','Voided By','Voided At','Void Reason']);
+    DB.supplierPayments.filter(p=>inR(p.createdAt)).forEach(p=>rows.push([new Date(p.createdAt).toLocaleString('en-GB'),p.id,p.supplierName,p.amount,p.method,p.note||'',p.recordedBy,p.voided?'VOIDED':'ACTIVE',p.voidedBy||'',p.voidedAt?new Date(p.voidedAt).toLocaleString('en-GB'):'',p.voidReason||'']));
   }else if(type==='cashAdjustments'){
     rows.push(['Date','Amount','Note','Recorded By']);
     DB.cashAdjustments.filter(c=>!c.deleted && inR(recordTime(c))).forEach(c=>rows.push([recordDateLabel(c), c.amount, c.note||'', c.recordedBy]));
