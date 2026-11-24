@@ -2140,12 +2140,13 @@ function deleteCustomer(customerId){
 function renderSuppliers(){
   const view = document.getElementById('view');
   const activeSupplies = DB.supplies.filter(x=>!x.voided);
-  const totalRecordedCost = activeSupplies.reduce((s,x)=>s+(x.recordedCost!=null?x.recordedCost:x.totalCost),0);
+  const totalRecordedCost = activeSupplies.reduce((s,x)=>s+Number(x.paidNow!=null?x.paidNow:(x.recordedCost!=null?x.recordedCost:x.totalCost)),0)
+    + DB.supplierPayments.filter(p=>!p.voided).reduce((s,p)=>s+Number(p.amount||0),0);
   const totalOwed = DB.suppliers.filter(s=>!s.deleted).reduce((s,x)=>s+(x.balance||0),0);
   view.innerHTML = `
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Active Suppliers</div><div class="stat-value">${DB.suppliers.filter(s=>!s.deleted).length}</div></div>
-      <div class="stat-card"><div class="stat-label">Total Supplier Purchases (Cash + Credit)</div><div class="stat-value" style="color:var(--red-500);">${money(totalRecordedCost)}</div></div>
+      <div class="stat-card"><div class="stat-label">Total Supplier Purchases (Paid)</div><div class="stat-value" style="color:var(--red-500);">${money(totalRecordedCost)}</div></div>
       <div class="stat-card"><div class="stat-label">Owed to Suppliers (Credit)</div><div class="stat-value" style="color:${totalOwed>0?'var(--amber-600)':'var(--ink)'}">${money(totalOwed)}</div></div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">
@@ -3149,7 +3150,12 @@ function getOverviewData(range){
   const voidedExpenses = DB.expenses.filter(e=>e.voided && inR(recordTime(e))).length;
   const totalSalaries = DB.salaryPayments.filter(sp=>!sp.voided && inR(recordTime(sp))).reduce((s,sp)=>s+Number(sp.amountPaid||0),0);
   const supplies = DB.supplies.filter(x=>!x.voided && inR(recordTime(x)));
-  const totalSupplyRecordedCost = supplies.reduce((s,x)=>s+(x.recordedCost!=null?x.recordedCost:x.totalCost),0);
+  // Cash-basis supplier purchases: count only what was paid at delivery plus
+  // later supplier payments actually made in the selected reporting period.
+  // Outstanding credit is tracked separately and must never reduce Net Position.
+  const totalSupplyPaidAtDelivery = supplies.reduce((s,x)=>s+Number(x.paidNow!=null?x.paidNow:(x.recordedCost!=null?x.recordedCost:x.totalCost)),0);
+  const totalSupplierPayments = DB.supplierPayments.filter(p=>!p.voided && inR(recordTime(p))).reduce((s,p)=>s+Number(p.amount||0),0);
+  const totalSupplyRecordedCost = totalSupplyPaidAtDelivery + totalSupplierPayments;
   const totalSupplyBonus = supplies.reduce((s,x)=>s+(x.bonus||0),0);
   const totalSupplierCredit = DB.suppliers.filter(s=>!s.deleted).reduce((s,x)=>s+(x.balance||0),0);
   const cashInHand = DB.cashAdjustments.filter(c=>!c.deleted && inR(recordTime(c))).reduce((s,c)=>s+Number(c.amount||0),0);
@@ -3210,12 +3216,12 @@ function renderReportsOverview(){
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Total Expenses ${pl}</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalExpenses)}</div></div>
       ${isAdmin() ? `<div class="stat-card"><div class="stat-label">Total Salaries Paid</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSalaries)}</div></div>` : ''}
-      <div class="stat-card"><div class="stat-label">Total Supplier Purchases</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSupplyRecordedCost)}</div><div class="stat-delta" style="color:var(--ink-dim);">excludes ${money(d.totalSupplyBonus)} bonus stock</div></div>
+      <div class="stat-card"><div class="stat-label">Total Supplier Purchases (Paid)</div><div class="stat-value" style="color:var(--red-500);">${money(d.totalSupplyRecordedCost)}</div><div class="stat-delta" style="color:var(--ink-dim);">paid at delivery + later supplier payments; excludes ${money(d.totalSupplyBonus)} bonus stock</div></div>
       <div class="stat-card"><div class="stat-label">Owed to Suppliers (Credit, now)</div><div class="stat-value" style="color:${d.totalSupplierCredit>0?'var(--amber-600)':'var(--ink)'}">${money(d.totalSupplierCredit)}</div></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Cash in Hand (Opening Balance)</div><div class="stat-value">${money(d.cashInHand)}</div>${isAll?'':'<div class="stat-delta" style="color:var(--ink-dim);">added during this period</div>'}</div>
-      <div class="stat-card"><div class="stat-label">Net Position</div><div class="stat-value" style="color:${d.netPosition>=0?'var(--green-500)':'var(--red-500)'};">${money(d.netPosition)}</div><div class="stat-delta" style="color:var(--ink-dim);">${isAdmin() ? 'Cash in hand + revenue − expenses − salaries − supplier purchases' : 'Cash in hand + revenue − operating costs'}</div></div>
+      <div class="stat-card"><div class="stat-label">Net Position</div><div class="stat-value" style="color:${d.netPosition>=0?'var(--green-500)':'var(--red-500)'};">${money(d.netPosition)}</div><div class="stat-delta" style="color:var(--ink-dim);">${isAdmin() ? 'Cash in hand + revenue − expenses − salaries − supplier payments made' : 'Cash in hand + revenue − operating costs'}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
       <div class="card">
@@ -3297,8 +3303,8 @@ function buildOverviewReportHtml(){
     prKpis([
       ['Expenses', money(d.totalExpenses)],
       ...(isAdmin() ? [['Salaries Paid', money(d.totalSalaries)]] : []),
-      ['Supplier Purchases', money(d.totalSupplyRecordedCost), `excl. ${money(d.totalSupplyBonus)} bonus`],
-      ['Net Position', money(d.netPosition), 'cash added + revenue − costs']
+      ['Supplier Purchases (Paid)', money(d.totalSupplyRecordedCost), `excl. ${money(d.totalSupplyBonus)} bonus; excludes unpaid credit`],
+      ['Net Position', money(d.netPosition), 'cash added + revenue − paid operating costs']
     ]) +
     `<div class="pr-cols">` +
       prTable('Collected by Payment Method', ['Method','Amount'], [
